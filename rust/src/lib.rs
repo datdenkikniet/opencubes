@@ -31,13 +31,18 @@ pub fn make_bar(len: u64) -> indicatif::ProgressBar {
     bar
 }
 
+struct Offset(usize, usize);
+type Inner = u8;
+const INNER_WIDTH: usize = core::mem::size_of::<Inner>() * 8;
+const INNER_COUNT: usize = 16;
+
 /// A polycube
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PolyCube {
     dim_1: u8,
     dim_2: u8,
     dim_3: u8,
-    filled: Vec<bool>,
+    filled: [Inner; INNER_COUNT],
 }
 
 impl core::fmt::Display for PolyCube {
@@ -105,7 +110,8 @@ impl PolyCube {
     }
 
     pub fn present_cubes(&self) -> usize {
-        self.filled.iter().filter(|v| **v).count()
+        // self.filled.iter().filter(|v| **v).count()
+        todo!()
     }
 
     pub fn unpack(mut from: impl Read) -> std::io::Result<Self> {
@@ -119,18 +125,19 @@ impl PolyCube {
         let mut data = vec![0u8; (size + 7) / 8];
         from.read_exact(&mut data)?;
 
-        let mut filled = Vec::with_capacity(size);
+        // let mut filled = Vec::with_capacity(size);
 
         data.iter().for_each(|v| {
             for s in 0..8 {
-                let is_set = ((*v >> s) & 0x1) == 0x1;
-                if filled.capacity() != filled.len() {
-                    filled.push(is_set);
-                }
+                // let is_set = ((*v >> s) & 0x1) == 0x1;
+                // if filled.capacity() != filled.len() {
+                //     filled.push(is_set);
+                // }
+                todo!()
             }
         });
 
-        Ok(Self::new_raw(d1, d2, d3, filled))
+        Ok(Self::new_raw(d1, d2, d3, [0; INNER_COUNT]))
     }
 
     pub fn pack(&self, mut write: impl Write) -> std::io::Result<()> {
@@ -145,9 +152,10 @@ impl PolyCube {
         let mut filled = self.filled.iter();
         out_bytes.iter_mut().skip(3).for_each(|v| {
             for s in 0..8 {
-                if let Some(true) = filled.next() {
-                    *v |= 1 << s;
-                }
+                // if let Some(true) = filled.next() {
+                //     *v |= 1 << s;
+                // }
+                todo!()
             }
         });
 
@@ -183,25 +191,24 @@ impl PolyCube {
 
     /// Calculate the offset into `self.filled` using the provided offsets
     /// within each dimension.
-    fn offset(&self, dim_1: u8, dim_2: u8, dim_3: u8) -> Option<usize> {
+    fn offset(&self, dim_1: u8, dim_2: u8, dim_3: u8) -> Option<Offset> {
         if dim_1 < self.dim_1 && dim_2 < self.dim_2 && dim_3 < self.dim_3 {
             let d1 = dim_1 as usize * self.dim_2 as usize * self.dim_3 as usize;
             let d2 = dim_2 as usize * self.dim_3 as usize;
             let d3 = dim_3 as usize;
             let index = d1 + d2 + d3;
 
-            Some(index)
+            Some(Offset(index / INNER_WIDTH, index % INNER_WIDTH))
         } else {
             None
         }
     }
 
-    pub fn new_raw(dim_1: u8, dim_2: u8, dim_3: u8, filled: Vec<bool>) -> Self {
+    pub fn new_raw(dim_1: u8, dim_2: u8, dim_3: u8, filled: [Inner; INNER_COUNT]) -> Self {
         Self {
             dim_1,
             dim_2,
             dim_3,
-
             filled,
         }
     }
@@ -209,9 +216,7 @@ impl PolyCube {
     /// Create a new [`PolyCube`] with dimensions `(dim_1, dim_2, dim_3)` and
     /// a new allocation tracker.
     pub fn new(dim_1: u8, dim_2: u8, dim_3: u8) -> Self {
-        let filled = (0..dim_1 as usize * dim_2 as usize * dim_3 as usize)
-            .map(|_| false)
-            .collect();
+        let filled = [0; INNER_COUNT];
 
         Self {
             dim_1,
@@ -229,8 +234,12 @@ impl PolyCube {
 
     /// Set the state of the box located at `(d1, d2, d3)` to `set`.
     pub fn set_to(&mut self, d1: u8, d2: u8, d3: u8, set: bool) -> Result<(), ()> {
-        let idx = self.offset(d1, d2, d3).ok_or(())?;
-        self.filled[idx] = set;
+        let Offset(idx, shift) = self.offset(d1, d2, d3).ok_or(())?;
+        if set {
+            self.filled[idx] |= 1 << shift;
+        } else {
+            self.filled[idx] &= !(1 << shift);
+        }
         Ok(())
     }
 
@@ -242,7 +251,10 @@ impl PolyCube {
     /// Returns whether the box located at `(d1, d2, d3)` is filled.
     pub fn is_set(&self, d1: u8, d2: u8, d3: u8) -> bool {
         self.offset(d1, d2, d3)
-            .map(|v| self.filled[v])
+            .map(|v| {
+                let Offset(idx, shift) = v;
+                (self.filled[idx] >> shift) & 0x1 == 0x1
+            })
             .unwrap_or(false)
     }
 
@@ -301,10 +313,11 @@ impl PolyCube {
                     let original = [d1, d2, d3];
                     let [t1, t2, t3] = [original[a1], original[a2], original[a3]];
 
-                    let orig_idx = self.offset(d1, d2, d3).unwrap();
-                    let transposed_idx = new_cube.offset(t1, t2, t3).unwrap();
+                    let Offset(orig_offset, orig_shift) = self.offset(d1, d2, d3).unwrap();
+                    let Offset(trans_offset, trans_shift) = new_cube.offset(t1, t2, t3).unwrap();
 
-                    new_cube.filled[transposed_idx] = self.filled[orig_idx];
+                    new_cube.filled[trans_offset] |=
+                        ((self.filled[orig_offset] >> orig_shift) & 0x1) << trans_shift;
                 }
             }
         }
@@ -323,10 +336,11 @@ impl PolyCube {
                 for d1 in 0..self.dim_1 {
                     for d2 in 0..self.dim_2 {
                         for d3 in 0..self.dim_3 {
-                            let idx_1 = self.offset(d1, d2, d3).unwrap();
-                            let idx_2 = $flipped_idx(d1, d2, d3).unwrap();
+                            let Offset(idx_1, shift_1) = self.offset(d1, d2, d3).unwrap();
+                            let Offset(idx_2, shift_2) = $flipped_idx(d1, d2, d3).unwrap();
 
-                            new_cube.filled[idx_2] = self.filled[idx_1];
+                            new_cube.filled[idx_2] |=
+                                ((self.filled[idx_1] >> shift_1) & 0x1) << shift_2;
                         }
                     }
                 }
@@ -489,7 +503,7 @@ impl PolyCube {
                 dim_1: 0,
                 dim_2: 0,
                 dim_3: 0,
-                filled: Vec::new(),
+                filled: [0; INNER_COUNT],
             };
         }
 
