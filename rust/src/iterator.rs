@@ -108,13 +108,13 @@ impl PolyCube {
     }
 }
 
-type Sides = std::array::IntoIter<(usize, usize, usize), 6>;
+type Sides = std::array::IntoIter<(u8, u8, u8), 6>;
 
 #[derive(Clone)]
 struct ToggleIterator {
-    dim_1: usize,
-    dim_2: usize,
-    dim_3: usize,
+    dim_1: u8,
+    dim_2: u8,
+    dim_3: u8,
     iterating_cube: Option<Sides>,
     padded_cube: PolyCube,
     done: bool,
@@ -139,7 +139,7 @@ impl ToggleIterator {
         self.dim_3 == self.padded_cube.dim_3 - 1
     }
 
-    fn faces(d1: usize, d2: usize, d3: usize) -> std::array::IntoIter<(usize, usize, usize), 6> {
+    fn faces(d1: u8, d2: u8, d3: u8) -> std::array::IntoIter<(u8, u8, u8), 6> {
         [
             (d1 + 1, d2, d3),
             (d1 - 1, d2, d3),
@@ -177,7 +177,7 @@ impl Iterator for ToggleIterator {
                 }
             }
 
-            if let Some(ref mut sides) = self.iterating_cube {
+            if let Some(sides) = &mut self.iterating_cube {
                 let (d1, d2, d3) = sides.next().unwrap();
 
                 if sides.len() == 0 {
@@ -189,7 +189,6 @@ impl Iterator for ToggleIterator {
                     continue;
                 }
 
-                self.padded_cube.increase_alloc_count();
                 let mut next_cube = self.padded_cube.clone();
                 next_cube.set(d1, d2, d3).unwrap();
                 return Some(next_cube);
