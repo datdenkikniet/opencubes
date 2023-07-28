@@ -1,12 +1,6 @@
-use std::time::Instant;
-
-use crate::polycubes::{
-    pcube::RawPCube,
-    point_list::{CubeMapPos, Dim},
-};
+use crate::polycubes::point_list::{CubeMapPos, Dim};
 
 use hashbrown::{HashMap, HashSet};
-use indicatif::ProgressBar;
 use parking_lot::RwLock;
 use rayon::prelude::*;
 
@@ -27,7 +21,14 @@ impl MapStore {
         }
     }
 
-    fn insert(&self, dim: Dim, map: CubeMapPos<16>, count: usize) {
+    pub fn insert_key(&mut self, shape: Dim, start_cube: u16) {
+        if !self.inner.contains_key(&(shape, start_cube)) {
+            self.inner
+                .insert((shape, start_cube), RwLock::new(HashSet::new()));
+        }
+    }
+
+    pub fn insert(&self, dim: Dim, map: CubeMapPos<16>, count: usize) {
         // Check if we don't already happen to be in the minimum rotation position.
         let mut body_maybemin = CubeMapPos::new();
         body_maybemin.cubes[0..count].copy_from_slice(&map.cubes[1..count + 1]);
@@ -82,7 +83,9 @@ impl MapStore {
         }
     }
 
-    fn expand_cube_set(self, count: usize, dst: &mut MapStore, bar: &ProgressBar, parallel: bool) {
+    pub fn expand_cube_set(self, count: usize, parallel: bool) -> Self {
+        let mut dst = MapStore::new();
+
         // set up the dst sets before starting parallel processing so accessing doesnt block a global mutex
         for x in 0..=count + 1 {
             for y in 0..=(count + 1) / 2 {
@@ -95,11 +98,8 @@ impl MapStore {
             }
         }
 
-        bar.set_message(format!("seed subsets expanded for N = {}...", count + 1));
-
         let inner_exp = |((shape, first_cube), body): (_, RwLock<HashSet<_>>)| {
             dst.expand_cube_sub_set(shape, first_cube, body.into_inner().into_iter(), count);
-            bar.inc(1);
         };
 
         // Use parallel iterator or not to run expand_cube_set
@@ -111,10 +111,12 @@ impl MapStore {
 
         //retain only subsets that have polycubes
         dst.inner.retain(|_, v| v.read().len() > 0);
+
+        dst
     }
 
     /// Count the number of polycubes across all subsets
-    fn count_polycubes(&self) -> usize {
+    pub fn count_polycubes(&self) -> usize {
         let mut total = 0;
         #[cfg(feature = "diagnostics")]
         for ((d, s), body) in maps.iter().rev() {
@@ -135,22 +137,15 @@ impl MapStore {
     }
 
     /// Destructively move the data from hashset to vector
-    pub fn into_vec(self) -> Vec<CubeMapPos<16>> {
-        let mut v = Vec::with_capacity(self.count_polycubes());
-
-        for ((_, head), body) in self.inner.into_iter() {
-            let bod = body.read();
-            let mut cmp = CubeMapPos::new();
-            cmp.cubes[0] = head;
-            for b in bod.iter() {
-                for i in 0..15 {
-                    cmp.cubes[i + 1] = b.cubes[i];
-                }
-                v.push(cmp);
-            }
-        }
-
-        v
+    pub fn into_map_iter(self) -> impl Iterator<Item = CubeMapPos<16>> {
+        self.inner.into_iter().flat_map(|((_, head), body)| {
+            body.into_inner().into_iter().map(move |v| {
+                let mut pos = CubeMapPos::new();
+                pos.cubes[0] = head;
+                pos.cubes[1..16].copy_from_slice(&v.cubes[0..15]);
+                pos
+            })
+        })
     }
 
     /// Copy the data from hashset to vector
@@ -171,52 +166,4 @@ impl MapStore {
 
         v
     }
-}
-
-/// run pointlist based generation algorithm
-pub fn gen_polycubes(
-    n: usize,
-    _use_cache: bool,
-    parallel: bool,
-    current: Vec<RawPCube>,
-    calculate_from: usize,
-    bar: &ProgressBar,
-) -> Vec<CubeMapPos<16>> {
-    let t1_start = Instant::now();
-
-    //convert input vector of NaivePolyCubes and convert them to
-    let mut seeds = MapStore::new();
-    for seed in current.iter() {
-        let seed: CubeMapPos<16> = seed.into();
-        let dim = seed.extrapolate_dim();
-        if !seeds.inner.contains_key(&(dim, seed.cubes[0])) {
-            for i in 0..(dim.y * 32 + dim.x + 1) {
-                seeds
-                    .inner
-                    .insert((dim, i as u16), RwLock::new(HashSet::new()));
-            }
-        }
-        seeds.insert(dim, seed, calculate_from - 1);
-    }
-    drop(current);
-
-    for i in calculate_from..=n as usize {
-        bar.set_message(format!("seed subsets expanded for N = {}...", i));
-        let mut dst = MapStore::new();
-        seeds.expand_cube_set(i - 1, &mut dst, bar, parallel);
-        seeds = dst;
-
-        let t1_stop = Instant::now();
-        let time = t1_stop.duration_since(t1_start).as_micros();
-        bar.set_message(format!(
-            "Found {} unique expansions (N = {i}) in {}.{:06}s",
-            seeds.count_polycubes(),
-            time / 1000000,
-            time % 1000000
-        ));
-
-        bar.finish();
-    }
-
-    seeds.into_vec()
 }

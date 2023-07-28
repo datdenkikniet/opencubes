@@ -116,7 +116,7 @@ pub struct EnumerateOpts {
     pub mode: EnumerationMode,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, ValueEnum, PartialEq)]
 pub enum EnumerationMode {
     Standard,
     RotationReduced,
