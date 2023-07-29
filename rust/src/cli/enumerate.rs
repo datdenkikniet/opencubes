@@ -163,10 +163,9 @@ fn unique_expansions(
     compression: Compression,
     current: impl AllUniquePolycubeIterator,
     parallel: bool,
-    pointlist: bool,
-) -> usize {
+) -> Vec<RawPCube> {
     if n == 0 {
-        return 0;
+        return Vec::new();
     }
 
     let calculate_from = current.n();
@@ -182,34 +181,15 @@ fn unique_expansions(
 
     loop {
         let bar = make_bar(current.len() as u64);
+        bar.set_message(format!("Expanding base polycubes of N = {i}..."));
 
         let start = Instant::now();
 
         let with_bar = PolycubeProgressBarIter::new(bar.clone(), current);
-        let next: Vec<RawPCube> = if pointlist {
-            bar.set_message(format!("seed subsets expanded for N = {}...", i));
-
-            let mut seeds = pointlist::MapStore::new();
-
-            for seed in with_bar {
-                let seed: CubeMapPos<16> = seed.into();
-                let dim = seed.extrapolate_dim();
-                seeds.insert_key(dim, seed.cubes[0]);
-                seeds.insert(dim, seed, i);
-            }
-
-            seeds
-                .expand_cube_set(i, parallel)
-                .into_map_iter()
-                .map(Into::into)
-                .collect()
+        let next: Vec<RawPCube> = if parallel {
+            NaivePolyCube::unique_expansions_rayon(with_bar).collect()
         } else {
-            bar.set_message(format!("Expanding base polycubes of N = {i}..."));
-            if parallel {
-                NaivePolyCube::unique_expansions_rayon(with_bar).collect()
-            } else {
-                NaivePolyCube::unique_expansions(with_bar).collect()
-            }
+            NaivePolyCube::unique_expansions(with_bar).collect()
         };
 
         finish_bar(&bar, start.elapsed(), next.len(), i + 1);
@@ -221,7 +201,7 @@ fn unique_expansions(
         i += 1;
 
         if n.saturating_sub(i) == 0 {
-            return next.len();
+            return next;
         } else {
             current = AllUniques {
                 current: Arc::new(next),
@@ -281,15 +261,10 @@ pub fn enumerate(opts: &EnumerateOpts) {
 
     //Select enumeration function to run
     let cubes_len = match (opts.mode, opts.no_parallelism) {
-        (EnumerationMode::Standard | EnumerationMode::PointList, no_parallelism) => {
-            unique_expansions(
-                cache,
-                n,
-                opts.cache_compression,
-                seed_list,
-                !no_parallelism,
-                opts.mode == EnumerationMode::PointList,
-            )
+        (EnumerationMode::Standard, no_parallelism) => {
+            let cubes =
+                unique_expansions(cache, n, opts.cache_compression, seed_list, !no_parallelism);
+            cubes.len()
         }
         (EnumerationMode::RotationReduced, not_parallel) => {
             if n > 16 {
@@ -306,6 +281,28 @@ pub fn enumerate(opts: &EnumerateOpts) {
             };
 
             rotation_reduced::gen_polycubes(n, &bar)
+        }
+        (EnumerationMode::PointList, not_parallel) => {
+            if n > 16 {
+                println!("n > 16 not supported for point-list");
+                return;
+            }
+            let bar = if let (_, Some(max)) = seed_list.size_hint() {
+                make_bar(max as u64)
+            } else {
+                unknown_bar()
+            };
+
+            let startn = seed_list.n() + 1;
+            let cubes = pointlist::gen_polycubes(
+                n,
+                cache,
+                !not_parallel,
+                seed_list.collect(),
+                startn,
+                &bar,
+            );
+            cubes.len()
         }
         (EnumerationMode::Hashless, not_parallel) => {
             enumerate_hashless(n, !not_parallel, seed_list)
