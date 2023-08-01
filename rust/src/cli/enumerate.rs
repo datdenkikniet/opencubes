@@ -237,7 +237,7 @@ pub fn enumerate_hashless(
     bar.set_message(format!("Expanding seeds of N = {}...", start_n));
 
     let tx = if write_to_file {
-        let (tx, rx) = crossbeam_channel::bounded(16384);
+        let (tx, rx) = crossbeam_channel::bounded(1024 * 1024);
 
         // TODO: use save_to_cache while also putting this into it's own thread? Doesn't seem like
         // there is a smooth way to do this
@@ -254,11 +254,7 @@ pub fn enumerate_hashless(
                 panic!("Could not open cache file {name} for writing.");
             }
 
-            if let (_, Some(max)) = rx.size_hint() {
-                println!("Saving {} cubes to cache file", max);
-            } else {
-                println!("Saving stream of cubes to cache file");
-            }
+            bar.println("Saving stream of cubes to cache file");
 
             std::thread::spawn(move || {
                 PCubeFile::write_file(false, compression.into(), rx, name).unwrap();
