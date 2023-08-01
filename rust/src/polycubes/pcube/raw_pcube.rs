@@ -118,11 +118,11 @@ impl RawPCube {
         })
     }
 
-    pub fn pack(&self, mut write: impl Write) -> std::io::Result<()> {
-        write.write_all(&[self.dim_1, self.dim_2, self.dim_3])?;
-
+    pub fn pack(mut self, mut write: impl Write) -> std::io::Result<()> {
+        self.data.insert(0, self.dim_3);
+        self.data.insert(0, self.dim_2);
+        self.data.insert(0, self.dim_1);
         write.write_all(&self.data)?;
-
         Ok(())
     }
 }
