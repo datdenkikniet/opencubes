@@ -5,7 +5,7 @@ use std::{
 };
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressIterator, ProgressStyle};
 use opencubes::polycubes::{
     naive_polycube::NaivePolyCube,
     pcube::{PCubeFile, RawPCube},
@@ -40,7 +40,17 @@ fn finish_bar(bar: &ProgressBar, duration: Duration, expansions: usize, n: usize
 }
 
 fn unknown_bar() -> ProgressBar {
-    let style = ProgressStyle::with_template("[{elapsed_precise}] [{spinner:10.cyan/blue}] {msg}")
+    unknown_bar_with_pos(false)
+}
+
+fn unknown_bar_with_pos(with_pos: bool) -> ProgressBar {
+    let template = if with_pos {
+        "[{elapsed_precise}] [{spinner:10.cyan/blue}] {pos} {msg}"
+    } else {
+        "[{elapsed_precise}] [{spinner:10.cyan/blue}] {msg}"
+    };
+
+    let style = ProgressStyle::with_template(template)
         .unwrap()
         .tick_strings(&[
             ">---------",
@@ -158,12 +168,12 @@ pub struct ConvertArgs {
     #[clap(short, long)]
     pub output_path: Option<String>,
 
-    /// Don't count the cubes before writing the new file.
+    /// Count the cubes in stream-oriented files before writing the converted file.
     ///
     /// Counting requires 2 passes for the conversion to be completed, which
     /// can be slow.
     #[clap(long, short = 'n')]
-    pub dont_count: bool,
+    pub count: bool,
 }
 
 #[derive(Clone, Args)]
@@ -330,13 +340,7 @@ pub fn convert(opts: &ConvertArgs) {
                 }
             };
 
-            let len = if !opts.dont_count {
-                Some(PCubeFile::new_file(&path).unwrap().count())
-            } else {
-                input_file.len()
-            };
-
-            (len, (input_file, path.to_string()))
+            (input_file.len(), (input_file, path.to_string()))
         })
         .collect();
 
@@ -346,13 +350,22 @@ pub fn convert(opts: &ConvertArgs) {
         .map(|(len, (input_file, path))| {
             let output_path = opts.output_path.clone().unwrap_or(path.clone());
 
-            println!("Converting file {}", path);
-            println!("Final output path: {output_path}");
+            multi_bar
+                .println(format!("Converting file {}", path))
+                .unwrap();
+            multi_bar
+                .println(format!("Final output path: {output_path}"))
+                .unwrap();
+
             if opts.canonicalize {
-                println!("Canonicalizing output");
+                multi_bar.println("Canonicalizing output").unwrap();
             }
-            println!("Input compression: {:?}", input_file.compression());
-            println!("Output compression: {:?}", opts.compression);
+            multi_bar
+                .println(format!("Input compression: {:?}", input_file.compression()))
+                .unwrap();
+            multi_bar
+                .println(format!("Output compression: {:?}", opts.compression))
+                .unwrap();
 
             let bar = if let Some(len) = len {
                 make_bar(len as u64)
@@ -370,6 +383,24 @@ pub fn convert(opts: &ConvertArgs) {
     files
         .into_par_iter()
         .for_each(|(input_file, path, output_path, len, bar)| {
+            let len = if opts.count && len.is_none() {
+                let bar = unknown_bar_with_pos(true);
+                let counting_bar = multi_bar.add(bar);
+                counting_bar.set_message(format!("polycubes counted in {path}"));
+
+                let with_progress = PCubeFile::new_file(&path)
+                    .unwrap()
+                    .progress_with(counting_bar.clone());
+
+                let output = Some(with_progress.count());
+
+                counting_bar.finish_and_clear();
+
+                output
+            } else {
+                input_file.len()
+            };
+
             bar.set_message(path.to_string());
 
             let canonical = input_file.canonical();
