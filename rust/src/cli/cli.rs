@@ -255,7 +255,7 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
     }
 
     if let Some(n) = n {
-        eprintln!("Verifying that all entries are N = {n}");
+        bar.println(format!("Verifying that all entries are N = {n}"));
     }
 
     let mut total_read = 0;
@@ -307,9 +307,9 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
                 exit("Found non-unique polycubes.");
             }
         }
-
-        bar.finish();
     }
+
+    bar.finish();
 
     println!("Success: {path}, containing {total_read} cubes, is valid");
 

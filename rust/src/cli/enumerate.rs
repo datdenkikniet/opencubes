@@ -59,11 +59,16 @@ fn save_to_cache(
     n: usize,
     // Ideally, this would be `AllUniquePolycubeIterator` but it's
     // a bit unwieldy
-    cubes: impl Iterator<Item = RawPCube> + ExactSizeIterator,
+    cubes: impl Iterator<Item = RawPCube>,
 ) {
     let name = &format!("cubes_{n}.pcube");
     if !std::fs::File::open(name).is_ok() {
-        println!("Saving {} cubes to cache file", cubes.len());
+        if let (_, Some(max)) = cubes.size_hint() {
+            println!("Saving {} cubes to cache file", max);
+        } else {
+            println!("Saving stream of cubes to cache file");
+        }
+
         PCubeFile::write_file(false, compression.into(), cubes, name).unwrap();
     } else {
         println!("Cache file already exists for N = {n}. Not overwriting.");
@@ -217,6 +222,8 @@ pub fn enumerate_hashless(
     n: usize,
     parallel: bool,
     current: impl AllUniquePolycubeIterator + Send,
+    write_to_file: bool,
+    compression: Compression,
 ) -> usize {
     let t1_start = Instant::now();
 
@@ -229,9 +236,49 @@ pub fn enumerate_hashless(
 
     bar.set_message(format!("Expanding seeds of N = {}...", start_n));
 
+    let tx = if write_to_file {
+        let (tx, rx) = crossbeam_channel::bounded(16384);
+
+        // TODO: use save_to_cache while also putting this into it's own thread? Doesn't seem like
+        // there is a smooth way to do this
+        let rx = rx.into_iter();
+        let name = format!("cubes_{n}.pcube");
+
+        if !std::fs::File::open(&name).is_ok() {
+            if !std::fs::File::options()
+                .create(true)
+                .write(true)
+                .open(&name)
+                .is_ok()
+            {
+                panic!("Could not open cache file {name} for writing.");
+            }
+
+            if let (_, Some(max)) = rx.size_hint() {
+                println!("Saving {} cubes to cache file", max);
+            } else {
+                println!("Saving stream of cubes to cache file");
+            }
+
+            std::thread::spawn(move || {
+                PCubeFile::write_file(false, compression.into(), rx, name).unwrap();
+            });
+        } else {
+            panic!("Cache file already exists for for N = {n}. Exiting...");
+        }
+
+        Some(tx)
+    } else {
+        None
+    };
+
     let process = |seed: RawPCube| {
         let seed: CubeMapPos<32> = seed.into();
-        let children = MapStore::enumerate_canonical_children_min_mem(&seed, start_n, n);
+        let children = if let Some(tx) = &tx {
+            MapStore::enumerate_canonical_children_min_mem_with_output(&seed, start_n, n, &tx)
+        } else {
+            MapStore::enumerate_canonical_children_min_mem(&seed, start_n, n)
+        };
         bar.inc(1);
         children
     };
@@ -304,9 +351,13 @@ pub fn enumerate(opts: &EnumerateOpts) {
             );
             cubes.len()
         }
-        (EnumerationMode::Hashless, not_parallel) => {
-            enumerate_hashless(n, !not_parallel, seed_list)
-        }
+        (EnumerationMode::Hashless, not_parallel) => enumerate_hashless(
+            n,
+            !not_parallel,
+            seed_list,
+            !opts.no_cache,
+            opts.cache_compression,
+        ),
     };
 
     let duration = start.elapsed();

@@ -1,6 +1,10 @@
+use crossbeam_channel::Sender;
 use hashbrown::HashSet;
 
-use crate::polycubes::point_list::{CubeMapPos, Dim};
+use crate::polycubes::{
+    pcube::RawPCube,
+    point_list::{CubeMapPos, Dim},
+};
 
 pub struct MapStore<const N: usize> {
     inner: HashSet<CubeMapPos<N>>,
@@ -54,6 +58,47 @@ impl<const N: usize> MapStore<N> {
                 .inner
                 .iter()
                 .map(|child| Self::enumerate_canonical_children_min_mem(child, count + 1, target))
+                .sum()
+        }
+    }
+
+    pub fn enumerate_canonical_children_min_mem_with_output(
+        seed: &CubeMapPos<N>,
+        count: usize,
+        target: usize,
+        sender: &Sender<RawPCube>,
+    ) -> usize {
+        let mut store = Self::new();
+        let shape = seed.extrapolate_dim();
+
+        let seed = seed.to_min_rot_points(shape, count);
+        let shape = seed.extrapolate_dim();
+
+        seed.expand(shape, count)
+            .for_each(|(dim, count, map)| store.insert_map(dim, map, count));
+
+        store
+            .inner
+            .retain(|child| child.is_canonical_root(count, &seed));
+
+        if count + 1 == target {
+            store.inner.iter().for_each(|c| {
+                sender.send(c.into()).unwrap();
+            });
+
+            store.inner.len()
+        } else {
+            store
+                .inner
+                .iter()
+                .map(|child| {
+                    Self::enumerate_canonical_children_min_mem_with_output(
+                        child,
+                        count + 1,
+                        target,
+                        sender,
+                    )
+                })
                 .sum()
         }
     }
