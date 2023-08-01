@@ -6,8 +6,11 @@ use std::{
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use opencubes::polycubes::{naive_polycube::NaivePolyCube, pcube::PCubeFile};
-use rayon::prelude::{IntoParallelIterator, ParallelIterator};
+use opencubes::polycubes::{
+    naive_polycube::NaivePolyCube,
+    pcube::{PCubeFile, RawPCube},
+};
+use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 mod enumerate;
 use enumerate::enumerate;
@@ -154,6 +157,13 @@ pub struct ConvertArgs {
     /// the conversion is complete.
     #[clap(short, long)]
     pub output_path: Option<String>,
+
+    /// Don't count the cubes before writing the new file.
+    ///
+    /// Counting requires 2 passes for the conversion to be completed, which
+    /// can be slow.
+    #[clap(long, short = 'n')]
+    pub dont_count: bool,
 }
 
 #[derive(Clone, Args)]
@@ -318,7 +328,7 @@ pub fn convert(opts: &ConvertArgs) {
     // that the longest files are yielded last.
     let files: BTreeMap<_, _> = opts
         .path
-        .iter()
+        .par_iter()
         .map(|path| {
             let input_file = match PCubeFile::new_file(&path) {
                 Ok(f) => f,
@@ -327,14 +337,21 @@ pub fn convert(opts: &ConvertArgs) {
                     std::process::exit(1);
                 }
             };
-            (input_file.len(), (input_file, path.to_string()))
+
+            let len = if !opts.dont_count {
+                Some(PCubeFile::new_file(&path).unwrap().count())
+            } else {
+                input_file.len()
+            };
+
+            (len, (input_file, path.to_string()))
         })
         .collect();
 
     // Iterate over the files and do some printing, in-order
     let files: Vec<_> = files
         .into_iter()
-        .map(|(_, (input_file, path))| {
+        .map(|(len, (input_file, path))| {
             let output_path = opts.output_path.clone().unwrap_or(path.clone());
 
             println!("Converting file {}", path);
@@ -344,8 +361,6 @@ pub fn convert(opts: &ConvertArgs) {
             }
             println!("Input compression: {:?}", input_file.compression());
             println!("Output compression: {:?}", opts.compression);
-
-            let len = input_file.len();
 
             let bar = if let Some(len) = len {
                 make_bar(len as u64)
@@ -376,6 +391,30 @@ pub fn convert(opts: &ConvertArgs) {
             let mut total_read = 0;
             let mut last_tick = Instant::now();
 
+            struct InputIter<I> {
+                inner: I,
+                len: Option<usize>,
+            }
+
+            impl<I> Iterator for InputIter<I>
+            where
+                I: Iterator<Item = RawPCube>,
+            {
+                type Item = RawPCube;
+
+                fn next(&mut self) -> Option<Self::Item> {
+                    self.inner.next()
+                }
+
+                fn size_hint(&self) -> (usize, Option<usize>) {
+                    if let Some(len) = self.len {
+                        (len, Some(len))
+                    } else {
+                        (0, None)
+                    }
+                }
+            }
+
             let input = input_file.filter_map(|v| {
                 total_read += 1;
 
@@ -404,6 +443,7 @@ pub fn convert(opts: &ConvertArgs) {
                 }
             });
 
+            let input = InputIter { inner: input, len };
             let canonical = canonical || opts.canonicalize;
 
             match PCubeFile::write_file(
