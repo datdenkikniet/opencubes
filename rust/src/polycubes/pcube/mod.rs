@@ -220,30 +220,11 @@ impl PCubeFile {
 
         let mut writer = Writer::new(compression, write);
 
-        loop {
-            let mut current_data = Vec::with_capacity(16384 * 10);
-            let mut finished = false;
-            for _ in 0..16384 {
-                if let Some(cube) = cubes.next() {
-                    if let Err(e) = cube.pack(&mut current_data) {
-                        return Err(e);
-                    }
-                } else {
-                    finished = true;
-                    break;
-                }
-            }
-
-            writer.write_all(&current_data)?;
-
-            if finished {
-                break;
-            }
-        }
-
         if let Some(e) = cubes.find_map(|v| v.pack(&mut writer).err()) {
             return Err(e);
         }
+
+        writer.flush()?;
 
         Ok(())
     }
