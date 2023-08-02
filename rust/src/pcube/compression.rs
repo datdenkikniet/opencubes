@@ -1,4 +1,4 @@
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 
 use flate2::{read::GzDecoder, write::GzEncoder};
 
@@ -74,7 +74,7 @@ pub enum Writer<T>
 where
     T: Write,
 {
-    Uncompressed(T),
+    Uncompressed(BufWriter<T>),
     Gzip(GzEncoder<T>),
 }
 
@@ -84,7 +84,7 @@ where
 {
     pub fn new(compression: Compression, writer: T) -> Self {
         match compression {
-            Compression::None => Self::Uncompressed(writer),
+            Compression::None => Self::Uncompressed(BufWriter::with_capacity(16384 * 10, writer)),
             Compression::Gzip => Self::Gzip(GzEncoder::new(writer, flate2::Compression::default())),
         }
     }
