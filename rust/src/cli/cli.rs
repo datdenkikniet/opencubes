@@ -274,7 +274,7 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
 
     for cube in file {
         let cube = match cube {
-            Ok(c) => NaivePolyCube::from(c),
+            Ok(c) => c,
             Err(e) => {
                 println!("Error: Reading the file failed. Error: {e}.");
                 std::process::exit(1);
@@ -285,28 +285,32 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
 
         bar.inc(1);
 
-        let mut form: Option<NaivePolyCube> = None;
-        let canonical_form = || cube.pcube_canonical_form();
+        if validate_canonical || n.is_some() || uniqueness.is_some() {
+            let cube = NaivePolyCube::from(cube);
 
-        if canonical && validate_canonical {
-            if form.get_or_insert_with(|| canonical_form()) != &cube {
-                exit(
-                    "Error: Found non-canonical polycube in file that claims to contain canonical cubes."
-                );
+            let mut form: Option<NaivePolyCube> = None;
+            let canonical_form = ||cube.pcube_canonical_form();
+
+            if canonical && validate_canonical {
+                if form.get_or_insert_with(|| canonical_form()) != &cube {
+                    exit(
+                        "Error: Found non-canonical polycube in file that claims to contain canonical cubes."
+                    );
+                }
             }
-        }
 
-        if let Some(n) = n {
-            let v = cube.present_cubes();
-            if v != n {
-                exit(&format!("Error: Found a cube with N != {n}. Value: {v}"));
+            if let Some(n) = n {
+                let v = cube.present_cubes();
+                if v != n {
+                    exit(&format!("Error: Found a cube with N != {n}. Value: {v}"));
+                }
             }
-        }
 
-        if let Some(uniqueness) = &mut uniqueness {
-            let form = form.get_or_insert_with(|| canonical_form()).clone();
-            if !uniqueness.insert(form) {
-                exit("Found non-unique polycubes.");
+            if let Some(uniqueness) = &mut uniqueness {
+                let form = form.get_or_insert_with(|| canonical_form()).clone();
+                if !uniqueness.insert(form) {
+                    exit("Found non-unique polycubes.");
+                }
             }
         }
     }
