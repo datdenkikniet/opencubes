@@ -45,7 +45,7 @@ where
 {
     pub fn new(compression: Compression, reader: T) -> Self {
         match compression {
-            Compression::None => Self::Uncompressed(BufReader::new(reader)),
+            Compression::None => Self::Uncompressed(BufReader::with_capacity(16384 * 10, reader)),
             Compression::Gzip => Self::Gzip(GzDecoder::new(reader)),
         }
     }
