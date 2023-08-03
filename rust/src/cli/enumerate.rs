@@ -244,7 +244,7 @@ pub fn enumerate_hashless(
         let rx = rx.into_iter();
         let name = format!("cubes_{n}.pcube");
 
-        if !std::fs::File::open(&name).is_ok() {
+        let handle = if !std::fs::File::open(&name).is_ok() {
             if !std::fs::File::options()
                 .create(true)
                 .write(true)
@@ -258,19 +258,19 @@ pub fn enumerate_hashless(
 
             std::thread::spawn(move || {
                 PCubeFile::write_file(false, compression.into(), rx, name).unwrap();
-            });
+            })
         } else {
             panic!("Cache file already exists for for N = {n}. Exiting...");
-        }
+        };
 
-        Some(tx)
+        Some((tx, handle))
     } else {
         None
     };
 
     let process = |seed: RawPCube| {
         let seed: CubeMapPos<32> = seed.into();
-        let children = if let Some(tx) = &tx {
+        let children = if let Some((tx, _)) = &tx {
             MapStore::enumerate_canonical_children_min_mem_with_output(&seed, start_n, n, &tx)
         } else {
             MapStore::enumerate_canonical_children_min_mem(&seed, start_n, n)
@@ -284,6 +284,12 @@ pub fn enumerate_hashless(
     } else {
         current.map(process).sum()
     };
+
+    // Wait for writing to finish.
+    if let Some((tx, handle)) = tx {
+        drop(tx);
+        handle.join().unwrap();
+    }
 
     finish_bar(&bar, t1_start.elapsed(), count, n);
 
