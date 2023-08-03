@@ -10,6 +10,7 @@ use opencubes::polycubes::{
     naive_polycube::NaivePolyCube,
     pcube::{PCubeFile, RawPCube},
 };
+use parking_lot::Mutex;
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 mod enumerate;
@@ -226,7 +227,7 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
 
     println!("Validating {}", path);
 
-    let mut uniqueness = match (in_memory, uniqueness) {
+    let uniqueness = match (in_memory, uniqueness) {
         (true, true) => {
             eprintln!("Verifying uniqueness.");
             Some(HashSet::new())
@@ -240,6 +241,8 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
             None
         }
     };
+
+    let uniqueness = Mutex::new(uniqueness);
 
     let file = PCubeFile::new_file(path)?;
     let canonical = file.canonical();
@@ -270,50 +273,48 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
         bar.println(format!("Verifying that all entries are N = {n}"));
     }
 
-    let mut total_read = 0;
+    let msg = "Error: Found non-canonical polycube in file that claims to contain canonical cubes.";
 
-    for cube in file {
-        let cube = match cube {
-            Ok(c) => c,
-            Err(e) => {
-                println!("Error: Reading the file failed. Error: {e}.");
-                std::process::exit(1);
-            }
-        };
+    let total_read = file
+        .inspect(|cube| {
+            let cube = match cube {
+                Ok(c) => c,
+                Err(e) => {
+                    println!("Error: Reading the file failed. Error: {e}.");
+                    std::process::exit(1);
+                }
+            };
 
-        total_read += 1;
+            bar.inc(1);
 
-        bar.inc(1);
+            if validate_canonical || n.is_some() || uniqueness.lock().is_some() {
+                let cube = NaivePolyCube::from(cube.clone());
 
-        if validate_canonical || n.is_some() || uniqueness.is_some() {
-            let cube = NaivePolyCube::from(cube);
+                let mut form: Option<NaivePolyCube> = None;
+                let canonical_form = || cube.pcube_canonical_form();
 
-            let mut form: Option<NaivePolyCube> = None;
-            let canonical_form = ||cube.pcube_canonical_form();
+                if canonical && validate_canonical {
+                    if form.get_or_insert_with(|| canonical_form()) != &cube {
+                        exit(msg);
+                    }
+                }
 
-            if canonical && validate_canonical {
-                if form.get_or_insert_with(|| canonical_form()) != &cube {
-                    exit(
-                        "Error: Found non-canonical polycube in file that claims to contain canonical cubes."
-                    );
+                if let Some(n) = n {
+                    let v = cube.present_cubes();
+                    if v != n {
+                        exit(&format!("Error: Found a cube with N != {n}. Value: {v}"));
+                    }
+                }
+
+                if let Some(uniqueness) = &mut *uniqueness.lock() {
+                    let form = form.get_or_insert_with(|| canonical_form()).clone();
+                    if !uniqueness.insert(form) {
+                        exit("Found non-unique polycubes.");
+                    }
                 }
             }
-
-            if let Some(n) = n {
-                let v = cube.present_cubes();
-                if v != n {
-                    exit(&format!("Error: Found a cube with N != {n}. Value: {v}"));
-                }
-            }
-
-            if let Some(uniqueness) = &mut uniqueness {
-                let form = form.get_or_insert_with(|| canonical_form()).clone();
-                if !uniqueness.insert(form) {
-                    exit("Found non-unique polycubes.");
-                }
-            }
-        }
-    }
+        })
+        .count();
 
     bar.finish();
 
