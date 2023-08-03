@@ -260,9 +260,6 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
 
     let mut total_read = 0;
 
-    let mut last_tick = Instant::now();
-    bar.tick();
-
     for cube in file {
         let cube = match cube {
             Ok(c) => NaivePolyCube::from(c),
@@ -276,11 +273,6 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
 
         if len.is_some() {
             bar.inc(1);
-        } else if last_tick.elapsed() >= Duration::from_millis(66) {
-            last_tick = Instant::now();
-            bar.set_message(format!("{total_read}"));
-            bar.inc(1);
-            bar.tick();
         }
 
         let mut form: Option<NaivePolyCube> = None;
