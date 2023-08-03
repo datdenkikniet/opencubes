@@ -248,8 +248,10 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
     let bar = if let Some(len) = len {
         make_bar(len as u64)
     } else {
-        unknown_bar()
+        unknown_bar_with_pos(true)
     };
+
+    bar.set_message("cubes read & validated...");
 
     let exit = |msg: &str| {
         bar.abandon();
@@ -258,10 +260,10 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
     };
 
     match (canonical, validate_canonical) {
-        (true, true) => eprintln!("Verifying entry canonicality. File indicates that entries are canonical."),
-        (false, true) => eprintln!("Not verifying entry canonicality. File header does not indicate that entries are canonical"),
-        (true, false) => eprintln!("Not verifying entry canonicality. File header indicates that they are, but check is disabled."),
-        (false, false) => eprintln!("Not verifying canonicality. File header does not indicate that entries are canonical, and check is disabled.")
+        (true, true) => bar.println("Verifying entry canonicality. File indicates that entries are canonical."),
+        (false, true) => bar.println("Not verifying entry canonicality. File header does not indicate that entries are canonical"),
+        (true, false) => bar.println("Not verifying entry canonicality. File header indicates that they are, but check is disabled."),
+        (false, false) => bar.println("Not verifying canonicality. File header does not indicate that entries are canonical, and check is disabled.")
     }
 
     if let Some(n) = n {
@@ -281,9 +283,7 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
 
         total_read += 1;
 
-        if len.is_some() {
-            bar.inc(1);
-        }
+        bar.inc(1);
 
         let mut form: Option<NaivePolyCube> = None;
         let canonical_form = || cube.pcube_canonical_form();
