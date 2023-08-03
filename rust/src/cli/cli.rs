@@ -10,7 +10,6 @@ use opencubes::polycubes::{
     naive_polycube::NaivePolyCube,
     pcube::{PCubeFile, RawPCube},
 };
-use parking_lot::Mutex;
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 mod enumerate;
@@ -227,7 +226,7 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
 
     println!("Validating {}", path);
 
-    let uniqueness = match (in_memory, uniqueness) {
+    let mut uniqueness = match (in_memory, uniqueness) {
         (true, true) => {
             eprintln!("Verifying uniqueness.");
             Some(HashSet::new())
@@ -241,8 +240,6 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
             None
         }
     };
-
-    let uniqueness = Mutex::new(uniqueness);
 
     let file = PCubeFile::new_file(path)?;
     let canonical = file.canonical();
@@ -287,7 +284,7 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
 
             bar.inc(1);
 
-            if validate_canonical || n.is_some() || uniqueness.lock().is_some() {
+            if validate_canonical || n.is_some() || uniqueness.is_some() {
                 let cube = NaivePolyCube::from(cube.clone());
 
                 let mut form: Option<NaivePolyCube> = None;
@@ -306,7 +303,7 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
                     }
                 }
 
-                if let Some(uniqueness) = &mut *uniqueness.lock() {
+                if let Some(uniqueness) = &mut uniqueness {
                     let form = form.get_or_insert_with(|| canonical_form()).clone();
                     if !uniqueness.insert(form) {
                         exit("Found non-unique polycubes.");

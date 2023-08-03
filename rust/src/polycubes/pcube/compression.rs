@@ -45,7 +45,7 @@ where
 {
     pub fn new(compression: Compression, reader: T) -> Self {
         match compression {
-            Compression::None => Self::Uncompressed(BufReader::with_capacity(16384 * 10, reader)),
+            Compression::None => Self::Uncompressed(BufReader::with_capacity(16384 * 1024, reader)),
             Compression::Gzip => Self::Gzip(GzDecoder::new(reader)),
         }
     }
@@ -83,7 +83,7 @@ where
     T: Write,
 {
     pub fn new(compression: Compression, writer: T) -> Self {
-        let buffered = BufWriter::with_capacity(16384 * 10, writer);
+        let buffered = BufWriter::with_capacity(16384 * 1024, writer);
         match compression {
             Compression::None => Self::Uncompressed(buffered),
             Compression::Gzip => {
