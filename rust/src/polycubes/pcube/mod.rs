@@ -93,25 +93,7 @@ where
         let [orientation, compression] = header;
         let canonicalized = orientation != 0;
 
-        let mut cube_count: u64 = 0;
-        let mut shift = 0;
-        loop {
-            let mut next_byte = [0u8; 1];
-            input.read_exact(&mut next_byte)?;
-
-            let [next_byte] = next_byte;
-
-            cube_count |= ((next_byte & 0x7F) as u64) << shift;
-
-            shift += 7;
-            if shift > 64 {
-                panic!("Cannot load possibly more than u64 cubes...");
-            }
-
-            if next_byte & 0x80 == 0 {
-                break;
-            }
-        }
+        let cube_count = PCubeFile::read_leb128(&mut input)?;
 
         let len = if cube_count == 0 {
             None
@@ -177,6 +159,63 @@ impl PCubeFile {
         Self::new(file)
     }
 
+    fn read_leb128(mut reader: impl Read) -> std::io::Result<u64> {
+        let mut cube_count: u64 = 0;
+        let mut shift = 0;
+        loop {
+            let mut next_byte = [0u8; 1];
+            reader.read_exact(&mut next_byte)?;
+
+            let [next_byte] = next_byte;
+
+            cube_count |= ((next_byte & 0x7F) as u64) << shift;
+
+            shift += 7;
+            if shift > 64 {
+                panic!("Cannot load possibly more than u64 cubes...");
+            }
+
+            if next_byte & 0x80 == 0 {
+                break;
+            }
+        }
+
+        return Ok(cube_count);
+    }
+
+    /// Write a leb128 value
+    ///
+    /// If `prefill` is `true`, this function will always
+    /// write 9 bytes of data describing `number`.
+    ///
+    /// This way, one can rewrite the data after it is known how many cubes
+    /// are present.
+    ///
+    /// # Panics
+    /// This function panics if `prefill && number > 0x7FFF_FFFF_FFFF_FFFF`
+    fn write_leb128(mut number: u64, mut writer: impl Write, prefill: bool) -> std::io::Result<()> {
+        let mut ran_once = false;
+        let mut bytes_written = 0;
+        while number > 0 || !ran_once || (prefill && bytes_written < 9) {
+            ran_once = true;
+            let mut next_byte = (number as u8) & 0x7F;
+            number >>= 7;
+
+            if number > 0 || (prefill && bytes_written != 8) {
+                next_byte |= 0x80;
+            }
+
+            writer.write_all(&[next_byte])?;
+            bytes_written += 1;
+
+            if bytes_written > 9 && prefill {
+                panic!("Cannot prefill LEB128 value longer than 9 bytes");
+            }
+        }
+
+        Ok(())
+    }
+
     /// Write implementation
     fn write_impl<I, W>(
         write_magic: bool,
@@ -205,18 +244,7 @@ impl PCubeFile {
             cube_count = max;
         }
 
-        let mut ran_once = false;
-        while cube_count > 0 || !ran_once {
-            ran_once = true;
-            let mut next_byte = (cube_count as u8) & 0x7F;
-            cube_count >>= 7;
-
-            if cube_count > 0 {
-                next_byte |= 0x80;
-            }
-
-            write.write_all(&[next_byte])?;
-        }
+        Self::write_leb128(cube_count as u64, &mut write, false)?;
 
         let mut writer = Writer::new(compression, write);
 
@@ -409,3 +437,14 @@ where
 }
 
 impl<T> AllUniquePolycubeIterator for AllUnique<T> where T: Read {}
+
+#[test]
+pub fn len() {
+    let values = [0, 1, 24, 150283, 0x7FFFF_FFFF, 0x7FFF_FFFF_FFFF_FFFF];
+
+    for value in values {
+        let mut data = Vec::new();
+        PCubeFile::write_leb128(value, &mut data, true).unwrap();
+        assert_eq!(value, PCubeFile::read_leb128(&data[..]).unwrap());
+    }
+}
