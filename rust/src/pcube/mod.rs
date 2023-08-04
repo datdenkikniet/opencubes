@@ -223,6 +223,10 @@ impl PCubeFile {
     ///
     /// If `prefill_len` is `true`, the length is _always_ written
     /// as 9 bytes. This way, rewriting the header in-place is possible.
+    ///
+    /// # Panics
+    /// This function panics if `prefill && number > MAX_PREFILL`
+    // TODO: this should probably take a `u128`?
     fn write_header(
         mut write: impl Write,
         magic: [u8; 4],
