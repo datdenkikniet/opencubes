@@ -52,6 +52,8 @@ where
     }
 }
 
+const MAX_PREFILL: u64 = 0x7FFF_FFFF_FFFF_FFFF;
+
 impl<T> PCubeFile<T>
 where
     T: Read,
@@ -192,9 +194,13 @@ impl PCubeFile {
     /// are present.
     ///
     /// # Panics
-    /// This function panics if `prefill && number > 0x7FFF_FFFF_FFFF_FFFF`
+    /// This function panics if `prefill && number > MAX_PREFILL`
     // TODO: this should probably take a `u128`?
     fn write_leb128(mut number: u64, mut writer: impl Write, prefill: bool) -> std::io::Result<()> {
+        if prefill && number > MAX_PREFILL {
+            panic!("Cannot prefill LEB128 value longer than 9 bytes");
+        }
+
         let mut ran_once = false;
         let mut bytes_written = 0;
         while number > 0 || !ran_once || (prefill && bytes_written < 9) {
@@ -208,10 +214,6 @@ impl PCubeFile {
 
             writer.write_all(&[next_byte])?;
             bytes_written += 1;
-
-            if bytes_written > 9 && prefill {
-                panic!("Cannot prefill LEB128 value longer than 9 bytes");
-            }
         }
 
         Ok(())
@@ -298,7 +300,7 @@ impl PCubeFile {
         Self::write_header(&mut seekable, magic, is_canonical, compression, len, true)?;
 
         let len = Self::write_impl(cubes, compression, &mut seekable)?;
-        let len = if len <= 0x7FFF_FFFF_FFFF_FFFF {
+        let len = if len as u64 <= MAX_PREFILL {
             Some(len as u64)
         } else {
             None
@@ -470,7 +472,7 @@ impl<T> AllUniquePolycubeIterator for AllUnique<T> where T: Read {}
 
 #[test]
 pub fn len() {
-    let values = [0, 1, 24, 150283, 0x7FFFF_FFFF, 0x7FFF_FFFF_FFFF_FFFF];
+    let values = [0, 1, 24, 150283, 0x7FFFF_FFFF, MAX_PREFILL];
 
     for value in values {
         let mut data = Vec::new();
@@ -483,5 +485,5 @@ pub fn len() {
 #[test]
 pub fn len_panics() {
     let mut data = Vec::new();
-    PCubeFile::write_leb128(0x8000_0000_0000_0000, &mut data, true).ok();
+    PCubeFile::write_leb128(MAX_PREFILL + 1, &mut data, true).ok();
 }
