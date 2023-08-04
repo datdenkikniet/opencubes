@@ -77,16 +77,15 @@ impl<const N: usize> MapStore<N> {
         seed.expand(shape, count)
             .for_each(|(dim, count, map)| store.insert_map(dim, map, count));
 
-        store.inner.retain(|child| {
-            if child.is_canonical_root(count, &seed) {
-                sender.send(child.into()).unwrap();
-                true
-            } else {
-                false
-            }
-        });
+        store
+            .inner
+            .retain(|child| child.is_canonical_root(count, &seed));
 
         if count + 1 == target {
+            store.inner.iter().for_each(|cube| {
+                sender.send(cube.into()).unwrap();
+            });
+
             store.inner.len()
         } else {
             store
