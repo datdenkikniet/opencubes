@@ -93,25 +93,7 @@ where
         let [orientation, compression] = header;
         let canonicalized = orientation != 0;
 
-        let mut cube_count: u64 = 0;
-        let mut shift = 0;
-        loop {
-            let mut next_byte = [0u8; 1];
-            input.read_exact(&mut next_byte)?;
-
-            let [next_byte] = next_byte;
-
-            cube_count |= ((next_byte & 0x7F) as u64) << shift;
-
-            shift += 7;
-            if shift > 64 {
-                panic!("Cannot load possibly more than u64 cubes...");
-            }
-
-            if next_byte & 0x80 == 0 {
-                break;
-            }
-        }
+        let cube_count = PCubeFile::read_leb128(&mut input)?;
 
         let len = if cube_count == 0 {
             None
@@ -177,56 +159,102 @@ impl PCubeFile {
         Self::new(file)
     }
 
-    /// Write implementation
-    fn write_impl<I, W>(
-        write_magic: bool,
-        mut cubes: I,
+    fn read_leb128(mut reader: impl Read) -> std::io::Result<u64> {
+        let mut cube_count: u64 = 0;
+        let mut shift = 0;
+        loop {
+            let mut next_byte = [0u8; 1];
+            reader.read_exact(&mut next_byte)?;
+
+            let [next_byte] = next_byte;
+
+            cube_count |= ((next_byte & 0x7F) as u64) << shift;
+
+            shift += 7;
+            if shift > 64 {
+                panic!("Cannot load possibly more than u64 cubes...");
+            }
+
+            if next_byte & 0x80 == 0 {
+                break;
+            }
+        }
+
+        return Ok(cube_count);
+    }
+
+    /// Write a leb128 value
+    ///
+    /// If `prefill` is `true`, this function will always
+    /// write 9 bytes of data describing `number`.
+    ///
+    /// This way, one can rewrite the data after it is known how many cubes
+    /// are present.
+    ///
+    /// # Panics
+    /// This function panics if `prefill && number > 0x7FFF_FFFF_FFFF_FFFF`
+    fn write_leb128(mut number: u64, mut writer: impl Write, prefill: bool) -> std::io::Result<()> {
+        let mut ran_once = false;
+        let mut bytes_written = 0;
+        while number > 0 || !ran_once || (prefill && bytes_written < 9) {
+            ran_once = true;
+            let mut next_byte = (number as u8) & 0x7F;
+            number >>= 7;
+
+            if number > 0 || (prefill && bytes_written != 8) {
+                next_byte |= 0x80;
+            }
+
+            writer.write_all(&[next_byte])?;
+            bytes_written += 1;
+
+            if bytes_written > 9 && prefill {
+                panic!("Cannot prefill LEB128 value longer than 9 bytes");
+            }
+        }
+
+        Ok(())
+    }
+
+    fn write_header(
+        mut write: impl Write,
+        magic: [u8; 4],
         is_canonical: bool,
         compression: Compression,
-        mut write: W,
-    ) -> std::io::Result<()>
+        cube_count: Option<usize>,
+        prefill_len: bool,
+    ) -> std::io::Result<()> {
+        let compression_val = compression.into();
+        let orientation_val = if is_canonical { 1 } else { 0 };
+
+        let cube_count = cube_count.unwrap_or(0);
+
+        write.write_all(&magic)?;
+        write.write_all(&[orientation_val, compression_val])?;
+        Self::write_leb128(cube_count as u64, &mut write, prefill_len)?;
+
+        Ok(())
+    }
+
+    /// Write implementation
+    fn write_impl<I, W>(cubes: I, compression: Compression, write: W) -> std::io::Result<usize>
     where
         I: Iterator<Item = RawPCube>,
         W: Write,
     {
-        if write_magic {
-            write.write_all(&MAGIC)?;
-        }
-
-        let compression_val = compression.into();
-        let orientation_val = if is_canonical { 1 } else { 0 };
-
-        write.write_all(&[orientation_val, compression_val])?;
-
-        let mut cube_count = 0;
-        let (_, max) = cubes.size_hint();
-
-        if let Some(max) = max {
-            cube_count = max;
-        }
-
-        let mut ran_once = false;
-        while cube_count > 0 || !ran_once {
-            ran_once = true;
-            let mut next_byte = (cube_count as u8) & 0x7F;
-            cube_count >>= 7;
-
-            if cube_count > 0 {
-                next_byte |= 0x80;
-            }
-
-            write.write_all(&[next_byte])?;
-        }
-
         let mut writer = Writer::new(compression, write);
 
-        if let Some(e) = cubes.find_map(|v| v.pack(&mut writer).err()) {
+        let mut cube_count = 0;
+        if let Some(e) = cubes
+            .inspect(|_| cube_count += 1)
+            .find_map(|v| v.pack(&mut writer).err())
+        {
             return Err(e);
         }
 
         writer.flush()?;
 
-        Ok(())
+        Ok(cube_count)
     }
 
     /// Write the [`RawPCube`]s produced by `I` into `W`.
@@ -237,13 +265,21 @@ impl PCubeFile {
         is_canonical: bool,
         compression: Compression,
         cubes: I,
-        write: W,
-    ) -> std::io::Result<()>
+        mut write: impl Write,
+    ) -> std::io::Result<usize>
     where
         I: Iterator<Item = RawPCube>,
-        W: Write,
     {
-        Self::write_impl(true, cubes, is_canonical, compression, write)
+        Self::write_header(
+            &mut write,
+            MAGIC,
+            is_canonical,
+            compression,
+            cubes.size_hint().1,
+            false,
+        )?;
+
+        Self::write_impl(cubes, compression, write)
     }
 
     /// Write the [`RawPCube`]s produced by `I` to the file at `path`.
@@ -270,13 +306,19 @@ impl PCubeFile {
 
         file.set_len(0)?;
         file.seek(std::io::SeekFrom::Start(0))?;
-        file.write_all(&[0, 0, 0, 0])?;
 
-        Self::write_impl(false, cubes, is_canonical, compression, &mut file)?;
+        let len = cubes.size_hint().1;
+        let magic = [0, 0, 0, 0];
+        Self::write_header(&mut file, magic, is_canonical, compression, len, true)?;
 
-        // Write magic last
+        let len = Self::write_impl(cubes, compression, &mut file)?;
+        let len = Some(len);
+
+        // Write magic and cube length
         file.seek(std::io::SeekFrom::Start(0))?;
-        file.write_all(&MAGIC)?;
+        Self::write_header(&mut file, MAGIC, is_canonical, compression, len, true)?;
+
+        file.flush()?;
 
         Ok(())
     }
@@ -409,3 +451,21 @@ where
 }
 
 impl<T> AllUniquePolycubeIterator for AllUnique<T> where T: Read {}
+
+#[test]
+pub fn len() {
+    let values = [0, 1, 24, 150283, 0x7FFFF_FFFF, 0x7FFF_FFFF_FFFF_FFFF];
+
+    for value in values {
+        let mut data = Vec::new();
+        PCubeFile::write_leb128(value, &mut data, true).unwrap();
+        assert_eq!(value, PCubeFile::read_leb128(&data[..]).unwrap());
+    }
+}
+
+#[should_panic]
+#[test]
+pub fn len_panics() {
+    let mut data = Vec::new();
+    PCubeFile::write_leb128(0x8000_0000_0000_0000, &mut data, true).ok();
+}
