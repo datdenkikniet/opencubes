@@ -193,6 +193,7 @@ impl PCubeFile {
     ///
     /// # Panics
     /// This function panics if `prefill && number > 0x7FFF_FFFF_FFFF_FFFF`
+    // TODO: this should probably take a `u128`?
     fn write_leb128(mut number: u64, mut writer: impl Write, prefill: bool) -> std::io::Result<()> {
         let mut ran_once = false;
         let mut bytes_written = 0;
@@ -225,7 +226,7 @@ impl PCubeFile {
         magic: [u8; 4],
         is_canonical: bool,
         compression: Compression,
-        cube_count: Option<usize>,
+        cube_count: Option<u64>,
         prefill_len: bool,
     ) -> std::io::Result<()> {
         let compression_val = compression.into();
@@ -235,7 +236,7 @@ impl PCubeFile {
 
         write.write_all(&magic)?;
         write.write_all(&[orientation_val, compression_val])?;
-        Self::write_leb128(cube_count as u64, &mut write, prefill_len)?;
+        Self::write_leb128(cube_count, &mut write, prefill_len)?;
 
         Ok(())
     }
@@ -275,14 +276,9 @@ impl PCubeFile {
         I: Iterator<Item = RawPCube>,
         W: std::io::Write,
     {
-        Self::write_header(
-            &mut write,
-            MAGIC,
-            is_canonical,
-            compression,
-            cubes.size_hint().1,
-            false,
-        )?;
+        let len = cubes.size_hint().1.map(|v| v as u64);
+
+        Self::write_header(&mut write, MAGIC, is_canonical, compression, len, false)?;
 
         Self::write_impl(cubes, compression, write)
     }
@@ -297,12 +293,16 @@ impl PCubeFile {
         S: std::io::Seek + std::io::Write,
         I: Iterator<Item = RawPCube>,
     {
-        let len = cubes.size_hint().1;
+        let len = cubes.size_hint().1.map(|v| v as u64);
         let magic = [0, 0, 0, 0];
         Self::write_header(&mut seekable, magic, is_canonical, compression, len, true)?;
 
         let len = Self::write_impl(cubes, compression, &mut seekable)?;
-        let len = Some(len);
+        let len = if len <= 0x7FFF_FFFF_FFFF_FFFF {
+            Some(len as u64)
+        } else {
+            None
+        };
 
         // Write magic and cube length at the end
         seekable.rewind()?;
