@@ -222,6 +222,7 @@ impl PCubeFile {
         mut cubes: I,
         is_canonical: bool,
         compression: Compression,
+        prefill_len: bool,
         mut write: W,
     ) -> std::io::Result<()>
     where
@@ -244,7 +245,7 @@ impl PCubeFile {
             cube_count = max;
         }
 
-        Self::write_leb128(cube_count as u64, &mut write, false)?;
+        Self::write_leb128(cube_count as u64, &mut write, prefill_len)?;
 
         let mut writer = Writer::new(compression, write);
 
@@ -271,7 +272,7 @@ impl PCubeFile {
         I: Iterator<Item = RawPCube>,
         W: Write,
     {
-        Self::write_impl(true, cubes, is_canonical, compression, write)
+        Self::write_impl(true, cubes, is_canonical, compression, false, write)
     }
 
     /// Write the [`RawPCube`]s produced by `I` to the file at `path`.
@@ -300,7 +301,9 @@ impl PCubeFile {
         file.seek(std::io::SeekFrom::Start(0))?;
         file.write_all(&[0, 0, 0, 0])?;
 
-        Self::write_impl(false, cubes, is_canonical, compression, &mut file)?;
+        Self::write_impl(false, cubes, is_canonical, compression, true, &mut file)?;
+
+        // Write magic and all cubes last
 
         // Write magic last
         file.seek(std::io::SeekFrom::Start(0))?;
