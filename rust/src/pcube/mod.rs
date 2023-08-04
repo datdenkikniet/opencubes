@@ -2,7 +2,7 @@
 
 use std::{
     fs::File,
-    io::{ErrorKind, Read, Seek, Write},
+    io::{ErrorKind, Read, Write},
     iter::Peekable,
     path::Path,
 };
@@ -287,6 +287,32 @@ impl PCubeFile {
         Self::write_impl(cubes, compression, write)
     }
 
+    pub fn write_seekable<S, I>(
+        mut seekable: S,
+        is_canonical: bool,
+        compression: Compression,
+        cubes: I,
+    ) -> std::io::Result<()>
+    where
+        S: std::io::Seek + std::io::Write,
+        I: Iterator<Item = RawPCube>,
+    {
+        let len = cubes.size_hint().1;
+        let magic = [0, 0, 0, 0];
+        Self::write_header(&mut seekable, magic, is_canonical, compression, len, true)?;
+
+        let len = Self::write_impl(cubes, compression, &mut seekable)?;
+        let len = Some(len);
+
+        // Write magic and cube length at the end
+        seekable.rewind()?;
+        Self::write_header(&mut seekable, MAGIC, is_canonical, compression, len, true)?;
+
+        seekable.flush()?;
+
+        Ok(())
+    }
+
     /// Write the [`RawPCube`]s produced by `I` to the file at `path`.
     ///
     /// This will create a new file, or _will_ overwrite the contents of the file at `path`.
@@ -307,25 +333,10 @@ impl PCubeFile {
     where
         I: Iterator<Item = RawPCube>,
     {
-        let mut file = std::fs::File::create(path.as_ref())?;
-
+        let file = std::fs::File::create(path.as_ref())?;
         file.set_len(0)?;
-        file.seek(std::io::SeekFrom::Start(0))?;
 
-        let len = cubes.size_hint().1;
-        let magic = [0, 0, 0, 0];
-        Self::write_header(&mut file, magic, is_canonical, compression, len, true)?;
-
-        let len = Self::write_impl(cubes, compression, &mut file)?;
-        let len = Some(len);
-
-        // Write magic and cube length
-        file.seek(std::io::SeekFrom::Start(0))?;
-        Self::write_header(&mut file, MAGIC, is_canonical, compression, len, true)?;
-
-        file.flush()?;
-
-        Ok(())
+        Self::write_seekable(file, is_canonical, compression, cubes)
     }
 }
 
