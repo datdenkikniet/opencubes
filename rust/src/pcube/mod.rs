@@ -216,6 +216,10 @@ impl PCubeFile {
         Ok(())
     }
 
+    /// Write the header
+    ///
+    /// If `prefill_len` is `true`, the length is _always_ written
+    /// as 9 bytes. This way, rewriting the header in-place is possible.
     fn write_header(
         mut write: impl Write,
         magic: [u8; 4],
@@ -265,10 +269,11 @@ impl PCubeFile {
         is_canonical: bool,
         compression: Compression,
         cubes: I,
-        mut write: impl Write,
+        mut write: W,
     ) -> std::io::Result<usize>
     where
         I: Iterator<Item = RawPCube>,
+        W: std::io::Write,
     {
         Self::write_header(
             &mut write,
