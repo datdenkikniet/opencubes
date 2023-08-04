@@ -2,7 +2,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 
 use flate2::{read::GzDecoder, write::GzEncoder};
 
-const BUF_SIZE: usize = 20 * 16384;
+const BUF_SIZE: usize = 1024 * 16384;
 
 /// Compression types supported for `.pcube` files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
