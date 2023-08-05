@@ -1,15 +1,13 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
+    io::{BufWriter, Seek, Write},
     path::PathBuf,
     time::Duration,
 };
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use opencubes::{
-    naive_polycube::NaivePolyCube,
-    pcube::{PCubeFile, RawPCube},
-};
+use opencubes::{naive_polycube::NaivePolyCube, pcube::PCubeFile};
 
 mod enumerate;
 use enumerate::enumerate;
@@ -167,6 +165,10 @@ pub struct ConvertArgs {
     /// the conversion is complete.
     #[clap(short, long)]
     pub output_path: Option<String>,
+
+    /// Use the by-size pcube format (may be incompatible)
+    #[clap(long)]
+    pub by_size: bool,
 }
 
 #[derive(Clone, Args)]
@@ -312,6 +314,88 @@ pub fn validate(opts: &ValidateArgs) -> std::io::Result<()> {
     Ok(())
 }
 
+fn convert_by_size(input_path: String, input: PCubeFile, output_path: String, bar: ProgressBar) {
+    let mut files = HashMap::new();
+
+    for cube in input {
+        let cube = match cube {
+            Ok(c) => c,
+            Err(e) => {
+                let msg = format!("{input_path} Failed. Error: {e}");
+                bar.abandon_with_message(msg);
+                std::process::exit(1);
+            }
+        };
+
+        let file = &mut files
+            .entry(cube.dims())
+            .or_insert_with(|| {
+                let (x, y, z) = cube.dims();
+                let path = format!(".{output_path}.{}.{}.{}.tmp", x, y, z);
+                let file = match std::fs::OpenOptions::new()
+                    .create(true)
+                    .read(true)
+                    .write(true)
+                    .open(&path)
+                {
+                    Ok(f) => f,
+                    Err(e) => {
+                        let msg =
+                            format!("{input_path} Failed while creating partial file. Error: {e}");
+                        bar.abandon_with_message(msg);
+                        std::process::exit(1);
+                    }
+                };
+
+                (path, BufWriter::with_capacity(16384 * 1024, file))
+            })
+            .1;
+
+        if let Err(e) = file.write_all(cube.data()) {
+            let msg = format!("{input_path} Failed while creating partial file. Error: {e}");
+            bar.abandon_with_message(msg);
+            std::process::exit(1);
+        }
+
+        bar.inc(1);
+    }
+
+    let mut output_file = match std::fs::File::create(output_path) {
+        Ok(f) => f,
+        Err(e) => {
+            let msg = format!("{input_path} Failed while concatenating files. Error: {e}");
+            bar.abandon_with_message(msg);
+            std::process::exit(1);
+        }
+    };
+
+    bar.println("Copying partial files to final output file...");
+
+    if let Some(e) = files.into_iter().map(|(_, v)| v).find_map(|(path, mut f)| {
+        macro_rules! ret_err {
+            ($in:expr) => {
+                if let Err(e) = $in {
+                    return Some(e);
+                }
+            };
+        }
+
+        ret_err!(f.flush());
+        let mut inner = f.into_inner().unwrap();
+        ret_err!(inner.rewind());
+        ret_err!(std::io::copy(&mut inner, &mut output_file));
+        std::fs::remove_file(path).err()
+    }) {
+        let msg = format!("{input_path} Failed while concatenating files. Error: {e}");
+        bar.abandon_with_message(msg);
+        std::process::exit(1);
+    }
+
+    output_file.flush().unwrap();
+
+    bar.finish_with_message("Done");
+}
+
 pub fn convert(opts: &ConvertArgs) {
     if opts.output_path.is_some() && opts.path.len() > 1 {
         println!("Cannot convert more than 1 file when output path is provided");
@@ -377,6 +461,11 @@ pub fn convert(opts: &ConvertArgs) {
     files
         .into_par_iter()
         .for_each(|(input_file, path, output_path, bar)| {
+            if opts.by_size {
+                convert_by_size(path, input_file, output_path, bar);
+                return;
+            }
+
             bar.set_message(format!("cubes converted for {path}"));
 
             let canonical = input_file.canonical();
