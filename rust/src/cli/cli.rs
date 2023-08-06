@@ -327,29 +327,34 @@ fn convert_by_size(input_path: String, input: PCubeFile, output_path: String, ba
             }
         };
 
-        let file = &mut files
-            .entry(cube.dims())
-            .or_insert_with(|| {
-                let (x, y, z) = cube.dims();
-                let path = format!(".{output_path}.{}.{}.{}.tmp", x, y, z);
-                let file = match std::fs::OpenOptions::new()
-                    .create(true)
-                    .read(true)
-                    .write(true)
-                    .open(&path)
-                {
-                    Ok(f) => f,
-                    Err(e) => {
-                        let msg =
-                            format!("{input_path} Failed while creating partial file. Error: {e}");
-                        bar.abandon_with_message(msg);
-                        std::process::exit(1);
-                    }
-                };
+        let data = &mut files.entry(cube.dims()).or_insert_with(|| {
+            let (x, y, z) = cube.dims();
+            let path = format!(".{output_path}.{}.{}.{}.tmp", x, y, z);
+            let file = match std::fs::OpenOptions::new()
+                .create(true)
+                .read(true)
+                .write(true)
+                .open(&path)
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    let msg =
+                        format!("{input_path} Failed while creating partial file. Error: {e}");
+                    bar.abandon_with_message(msg);
+                    std::process::exit(1);
+                }
+            };
 
-                (path, BufWriter::with_capacity(16384 * 1024, file))
-            })
-            .1;
+            (
+                BufWriter::with_capacity(16384 * 1024, file),
+                0u64,
+                path,
+                [x, y, z],
+            )
+        });
+
+        let file = &mut data.0;
+        data.1 += 1;
 
         if let Err(e) = file.write_all(cube.data()) {
             let msg = format!("{input_path} Failed while creating partial file. Error: {e}");
@@ -371,21 +376,27 @@ fn convert_by_size(input_path: String, input: PCubeFile, output_path: String, ba
 
     bar.println("Copying partial files to final output file...");
 
-    if let Some(e) = files.into_iter().map(|(_, v)| v).find_map(|(path, mut f)| {
-        macro_rules! ret_err {
-            ($in:expr) => {
-                if let Err(e) = $in {
-                    return Some(e);
-                }
-            };
-        }
+    if let Some(e) = files
+        .into_iter()
+        .map(|(_, v)| v)
+        .find_map(|(mut f, count, path, dims)| {
+            macro_rules! ret_err {
+                ($in:expr) => {
+                    if let Err(e) = $in {
+                        return Some(e);
+                    }
+                };
+            }
 
-        ret_err!(f.flush());
-        let mut inner = f.into_inner().unwrap();
-        ret_err!(inner.rewind());
-        ret_err!(std::io::copy(&mut inner, &mut output_file));
-        std::fs::remove_file(path).err()
-    }) {
+            ret_err!(f.flush());
+            let mut inner = f.into_inner().unwrap();
+            ret_err!(inner.rewind());
+            ret_err!(output_file.write(&dims));
+            ret_err!(output_file.write(&count.to_le_bytes()));
+            ret_err!(std::io::copy(&mut inner, &mut output_file));
+            std::fs::remove_file(path).err()
+        })
+    {
         let msg = format!("{input_path} Failed while concatenating files. Error: {e}");
         bar.abandon_with_message(msg);
         std::process::exit(1);
